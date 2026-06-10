@@ -11,6 +11,7 @@ import numpy as np
 import torch
 from torchvision import transforms
 from streamlit_drawable_canvas import st_canvas
+from scipy.ndimage import center_of_mass, shift
 
 # -----------------------
 # Configuração da página
@@ -113,7 +114,7 @@ with c4:
     st.markdown("""
     <div class="card">
         <h5>Entrada</h5>
-        <h2>280 × 280 -> 28 x 28</h2>
+        <h2>28 x 28</h2>
     </div>
     """, unsafe_allow_html=True)
 
@@ -130,7 +131,7 @@ with col1:
     st.subheader("Imagem")
 
     canvas_result = st_canvas(
-    stroke_width=18,
+    stroke_width=10,
     stroke_color="white",
     background_color="black",
     width=280,
@@ -149,43 +150,82 @@ if canvas_result.image_data is not None:
 
         img_array = np.array(img)
 
-        coords = np.argwhere(img_array > 10)
+        img_array = np.where(img_array > 80, 255, 0).astype(np.uint8)
 
-        if coords.size > 0:
+        coords = np.argwhere(img_array > 0)
 
-            y_min, x_min = coords.min(axis=0)
-            y_max, x_max = coords.max(axis=0)
+        if coords.size == 0:
+            st.warning("Desenhe um dígito antes de classificar.")
+            st.stop()
 
-            img = img.crop((x_min, y_min, x_max + 1, y_max + 1))
+        y_min, x_min = coords.min(axis=0)
+        y_max, x_max = coords.max(axis=0)
 
-        img.thumbnail((20, 20))
+        img_array = img_array[
+         y_min:y_max + 1,
+         x_min:x_max + 1
+        ]
 
-        nova = Image.new("L", (28, 28), color=0)
+        h, w = img_array.shape
 
-        w, h = img.size
+        if h > w:
 
-        nova.paste(
-            img,
-            (
-                (28 - w) // 2,
-                (28 - h) // 2
-            )
+            novo_h = 20
+            novo_w = max(1, round(w * 20 / h))
+
+        else:
+
+            novo_w = 20
+            novo_h = max(1, round(h * 20 / w))
+
+        img = Image.fromarray(img_array)
+
+        img = img.resize(
+            (novo_w, novo_h),
+            Image.Resampling.LANCZOS
         )
 
-        img = nova
+        img_array = np.array(img)
 
+        canvas = np.zeros((28, 28), dtype=np.uint8)
+
+        y_offset = (28 - novo_h) // 2
+        x_offset = (28 - novo_w) // 2
+
+        canvas[
+            y_offset:y_offset + novo_h,
+            x_offset:x_offset + novo_w
+        ] = img_array
+
+        cy, cx = center_of_mass(canvas)
+
+        desloc_x = 14 - cx
+        desloc_y = 14 - cy
+
+        canvas = shift(
+            canvas,
+            shift=(desloc_y, desloc_x),
+            mode="constant",
+            cval=0
+        )
+
+        canvas = np.clip(canvas, 0, 255).astype(np.uint8)
+
+        img = Image.fromarray(canvas)
+
+        # Apenas para visualização
         st.image(
-            img.resize((280, 280)),
+            img.resize(
+                (280, 280),
+                Image.Resampling.NEAREST
+            ),
             caption="Imagem enviada ao modelo"
-        )   
+        )
 
+        transform = transforms.ToTensor()
         normalize = transforms.Normalize((0.5,), (0.5,))
 
-        img_array = np.array(img).astype(np.float32)
-
-        tensor = torch.from_numpy(img_array)
-        tensor = tensor.unsqueeze(0)
-
+        tensor = transform(img)
         tensor = normalize(tensor)
 
         vetor = tensor.squeeze().numpy().flatten()
